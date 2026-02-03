@@ -7,7 +7,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! 📚\nВведите название книги или автора:")
+    await update.message.reply_text("Привет! 📚\nВведите название книги или автора для поиска:")
 
 async def search_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
@@ -17,14 +17,16 @@ async def search_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         resp = requests.post(APPS_SCRIPT_URL, json={"action": "search", "query": query})
+        resp.raise_for_status()
         data = resp.json()
         books = data.get("results", [])
-    except:
-        await update.message.reply_text("Ошибка подключения к библиотеке.")
+    except Exception as e:
+        print("Ошибка:", e)
+        await update.message.reply_text("❌ Ошибка поиска. Попробуйте позже.")
         return
 
     if not books:
-        await update.message.reply_text("Книги не найдены 😕")
+        await update.message.reply_text("Книги не найдены или все забронированы. 😕")
         return
 
     buttons = []
@@ -36,20 +38,28 @@ async def search_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def book_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    book_id = query.data.split("_")[1]
-    user = query.from_user.first_name
+    book_id = query.data.split("_", 1)[1]
+    user_name = query.from_user.first_name
 
     try:
-        resp = requests.post(APPS_SCRIPT_URL, json={"action": "book", "bookId": book_id, "userName": user})
+        resp = requests.post(APPS_SCRIPT_URL, json={
+            "action": "book",
+            "bookId": book_id,
+            "userName": user_name
+        })
+        resp.raise_for_status()
         result = resp.json()
-    except:
-        await query.edit_message_text("Ошибка бронирования.")
+    except Exception as e:
+        print("Ошибка бронирования:", e)
+        await query.edit_message_text("❌ Ошибка при бронировании.")
         return
 
     if result.get("success"):
-        await query.edit_message_text(f"✅ Забронировано: *{result['title']}*", parse_mode="Markdown")
+        await query.edit_message_text(f"✅ Вы забронировали:\n\n📘 *{result['title']}*\n\nСпасибо!", parse_mode="Markdown")
+    elif result.get("error") == "already_booked":
+        await query.edit_message_text("❌ Эта книга уже забронирована!")
     else:
-        await query.edit_message_text("❌ Книга уже забронирована или не найдена.")
+        await query.edit_message_text("Книга не найдена или недоступна.")
 
 if __name__ == "__main__":
     app = Application.builder().token(TELEGRAM_TOKEN).build()
