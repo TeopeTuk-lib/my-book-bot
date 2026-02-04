@@ -2,17 +2,11 @@ import os
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-from flask import Flask, request, jsonify
 
 # === Настройки ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL")
 
-# Создаём Flask и Telegram-приложение
-flask_app = Flask(__name__)
-bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# --- Обработчики бота ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! 📚\nВведите название книги или автора:")
 
@@ -24,6 +18,7 @@ async def search_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         resp = requests.post(APPS_SCRIPT_URL, json={"action": "search", "query": query})
+        resp.raise_for_status()
         data = resp.json()
         books = data.get("results", [])
     except Exception as e:
@@ -53,6 +48,7 @@ async def book_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "bookId": book_id,
             "userName": user_name
         })
+        resp.raise_for_status()
         result = resp.json()
     except Exception as e:
         print("Ошибка бронирования:", e)
@@ -66,30 +62,18 @@ async def book_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("Книга не найдена.")
 
-# Регистрируем обработчики ОДИН РАЗ при импорте
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_books))
-bot_app.add_handler(CallbackQueryHandler(book_handler))
-
-# Webhook endpoint
-@flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    update = request.get_json()
-    if update:
-        bot_app.update_queue.put_nowait(Update.de_json(update, bot_app.bot))
-    return jsonify({"ok": True})
-
-# Health check
-@flask_app.route("/")
-def home():
-    return "✅ Telegram book bot is running!"
-
-# Запуск бота в фоне (только один раз!)
 if __name__ == "__main__":
-    # Запускаем бота в фоновом режиме
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(bot_app.initialize())
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_books))
+    app.add_handler(CallbackQueryHandler(book_handler))
+
+    # Запуск webhook (встроенный сервер)
     port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"https://{os.getenv('RENDER_EXTERNAL_URL')}/{TELEGRAM_TOKEN}"
+    )
