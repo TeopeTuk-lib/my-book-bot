@@ -8,10 +8,8 @@ from flask import Flask, request, jsonify
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL")
 
-# Flask app
+# Создаём Flask и Telegram-приложение
 flask_app = Flask(__name__)
-
-# Telegram bot
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
 # --- Обработчики бота ---
@@ -68,28 +66,30 @@ async def book_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("Книга не найдена.")
 
-# Регистрация обработчиков
+# Регистрируем обработчики ОДИН РАЗ при импорте
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_books))
 bot_app.add_handler(CallbackQueryHandler(book_handler))
-
-# Запуск бота один раз при старте
-@flask_app.before_first_request
-def init_bot():
-    bot_app.run_polling(drop_pending_updates=True, close_loop=False)
 
 # Webhook endpoint
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     update = request.get_json()
-    bot_app.update_queue.put_nowait(Update.de_json(update, bot_app.bot))
+    if update:
+        bot_app.update_queue.put_nowait(Update.de_json(update, bot_app.bot))
     return jsonify({"ok": True})
 
 # Health check
 @flask_app.route("/")
 def home():
-    return "Telegram book bot is running!"
+    return "✅ Telegram book bot is running!"
 
+# Запуск бота в фоне (только один раз!)
 if __name__ == "__main__":
+    # Запускаем бота в фоновом режиме
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(bot_app.initialize())
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
